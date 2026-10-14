@@ -113,3 +113,4 @@ python -X utf8 -m documents.write_milvus
 - [快速启动](docs/quickstart.md)
 - [开发进度](docs/process.md)
 - [记忆模块设计](docs/memory.md)
+- [下载后配置与恢复：未上传文件、环境变量和初始化步骤](docs/下载后配置与恢复.md)
