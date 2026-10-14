@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${MEMORY_DB_NAME:-rag_memory}
+      POSTGRES_USER: ${MEMORY_DB_USER:-rag_user}
+      POSTGRES_PASSWORD: ${MEMORY_DB_PASSWORD:?请配置数据库密码}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - memory_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgadmin:
+      image: dpage/pgadmin4:9.18
+      restart: unless-stopped
+      environment:
+        PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:?请配置管理邮箱}
+        PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?请配置管理密码}
+      ports:
+        - "127.0.0.1:5050:80"
+      volumes:
+        - pgadmin_data:/var/lib/pgadmin
+      depends_on:
+        postgres:
+          condition: service_healthy
+
+volumes:
+    memory_pgdata:
+    pgadmin_data:

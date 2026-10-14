@@ -1,0 +1,23 @@
+[
+  {
+    "id": "dev_001",
+    "question": "晶圆级封装为什么能降低成本？",
+    "relevant_chunk_ids": [],
+    "reference": "",
+    "annotation_complete": false
+  },
+  {
+    "id": "dev_002",
+    "question": "为什么在整片晶圆上一起做封装比逐颗处理更省钱？",
+    "relevant_chunk_ids": [],
+    "reference": "",
+    "annotation_complete": false
+  },
+  {
+    "id": "dev_003",
+    "question": "高深宽比刻蚀中，刻蚀时间、能量密度和掩膜分别有什么作用？",
+    "relevant_chunk_ids": [],
+    "reference": "",
+    "annotation_complete": false
+  }
+]

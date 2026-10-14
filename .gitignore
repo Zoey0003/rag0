@@ -1,0 +1,21 @@
+.env
+.env.*
+!.env.example
+/memory_exports/
+__pycache__/
+*.py[cod]
+.idea/
+.test-tmp/
+
+# Local dependencies, models and generated files
+/models/
+.venv/
+venv/
+node_modules/
+dist/
+.vscode/
+*.log
+.pytest_cache/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm

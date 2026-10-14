@@ -1,0 +1,20 @@
+# Adapted from Streamlit's bundled shadcn theme.
+[theme]
+base = "light"
+primaryColor = "#0D9488"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F7F6"
+textColor = "#16302E"
+linkColor = "#0F766E"
+borderColor = "#DDEAE7"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "12px"
+buttonRadius = "12px"
+font = "sans-serif"
+
+[theme.sidebar]
+backgroundColor = "#F5FAF9"
+secondaryBackgroundColor = "#E8F2EF"
+textColor = "#16302E"
+primaryColor = "#0D9488"
