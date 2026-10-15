@@ -1,9 +1,18 @@
-﻿from urllib.parse import urlparse
+from urllib.parse import urlparse
 from uuid import UUID
 import requests
 import streamlit as st
 
 API_URL = "http://127.0.0.1:8000"
+st.session_state.setdefault("auth_token", None)
+# 从旧用户 ID 入口升级时，不沿用未认证的身份。
+if not st.session_state.auth_token:
+    st.session_state.user_id = None
+    st.session_state.user_name = ""
+    st.session_state.session_id = None
+    st.session_state.messages = []
+    st.session_state.conversations = {}
+    st.session_state.pop("session_action", None)
 st.set_page_config(page_title="芯知 · 半导体知识助手", page_icon=":material/memory:")
 
 #初始化st的session_state，避免KeyError
@@ -14,17 +23,39 @@ if st.session_state.get("memory_ui_version") != 1:
     st.session_state.session_id = None
     st.session_state.messages = []
     st.session_state.conversations = {}
+    st.session_state.pop("session_action", None)
     st.session_state.memory_ui_version = 1
+
+def auth_headers():
+    """有登录令牌时，在请求头中携带。"""
+    token = st.session_state.get("auth_token")
+    if not token:
+        return {}
+
+    return {
+        "Authorization": f"Bearer {token}",
+    }
 
 
 def api_request(method, path, **kwargs):
     """调用后端，转换错误响应为便于展示的提示。"""
+    # response = requests.request(
+    #     method,
+    #     f"{API_URL}{path}",
+    #     timeout=(10, 30),
+    #     **kwargs,
+    # )
+    headers = dict(kwargs.pop("headers", {}))
+    headers.update(auth_headers())
+
     response = requests.request(
         method,
         f"{API_URL}{path}",
         timeout=(10, 30),
+        headers=headers,
         **kwargs,
     )
+    handle_auth_expired(response)
     if not response.ok:
         try:
             detail = response.json().get("detail", response.text)
@@ -39,10 +70,30 @@ def load_sessions(user_id):
     items = api_request(
         "GET",
         "/memory/sessions",
-        params={"user_id": user_id},
     )
     return {item["session_id"]: item for item in items}
 
+def clear_login():
+    """清除当前页面的身份和聊天状态，不删除数据库记录。"""
+    st.session_state.auth_token = None
+    st.session_state.user_id = None
+    st.session_state.user_name = ""
+    st.session_state.session_id = None
+    st.session_state.messages = []
+    st.session_state.conversations = {}
+    st.session_state.pop("session_action", None)
+    st.session_state.pop("title_refresh_failed", None)
+
+
+def handle_auth_expired(response):
+    """已登录的请求返回 401 时，清理身份并返回登录入口。"""
+    if (
+        response.status_code == 401
+        and st.session_state.get("auth_token")
+    ):
+        clear_login()
+        st.session_state.auth_notice = "登录已失效，请重新登录。"
+        st.rerun()
 
 def activate_user(user):
     """切换用户并加载会话，清除上一用户的界面状态。"""
@@ -62,7 +113,6 @@ def switch_session(session_id):
         "GET",
         f"/memory/sessions/{session_id}/messages",
         params={
-            "user_id": st.session_state.user_id,
             "limit": 100,
         },
     )
@@ -79,7 +129,6 @@ def create_session():
         "POST",
         "/memory/sessions",
         json={
-            "user_id": st.session_state.user_id,
             "title": "新对话",
         },
     )
@@ -180,7 +229,6 @@ def render_session_rename():
                 "PATCH",
                 f"/memory/sessions/{session_id}",
                 json={
-                    "user_id": user_id,
                     "title": title,
                 },
             )
@@ -226,7 +274,7 @@ def render_session_delete():
         api_request(
             "DELETE",
             f"/memory/sessions/{session_id}",
-            params={"user_id": user_id},
+            params={},
         )
     except (requests.exceptions.RequestException, ValueError) as exc:
         st.error(f"删除失败：{exc}")
@@ -254,7 +302,7 @@ def render_session_export():
             result = api_request(
                 "GET",
                 f"/memory/sessions/{session_id}/export",
-                params={"user_id": user_id},
+                params={},
             )
         except (requests.exceptions.RequestException, ValueError) as exc:
             st.error(f"导出失败：{exc}")
@@ -314,7 +362,6 @@ def render_memory_panel():
                         "POST",
                         "/memory/facts",
                         json={
-                            "user_id": user_id,
                             "content": content.strip(),
                             "kind": (
                                 "preference"
@@ -343,7 +390,7 @@ def render_memory_panel():
             memories = api_request(
                 "GET",
                 "/memory/facts",
-                params={"user_id": user_id},
+                params={},
             )
         except (
             requests.exceptions.RequestException,
@@ -374,7 +421,7 @@ def render_memory_panel():
                         api_request(
                             "DELETE",
                             f"/memory/facts/{memory['memory_id']}",
-                            params={"user_id": user_id},
+                            params={},
                         )
                         st.session_state[notice_key] = "记忆已删除。"
                         st.rerun()
@@ -413,43 +460,138 @@ with st.sidebar:
     st.title(":material/memory: 芯知")
     st.caption("半导体知识助手")
 
-    with st.expander(
-        "用户入口",
-        expanded=not bool(st.session_state.user_id),
-    ):
-        with st.form("create_user_form"):
-            user_name = st.text_input("新用户名称", max_chars=100)
-            create_user_submitted = st.form_submit_button("创建用户")
+    # with st.expander("用户入口", expanded=not bool(st.session_state.user_id)):
+    #     with st.form("create_user_form"):
+    #         user_name = st.text_input("新用户名称", max_chars=100)
+    #         create_user_submitted = st.form_submit_button("创建用户")
+    #     if create_user_submitted:
+    #         try:
+    #             user = api_request("POST", "/memory/users", json={"name": user_name.strip()})
+    #             activate_user(user)
+    #             st.rerun()
+    #         except (requests.exceptions.RequestException, ValueError) as exc:
+    #             st.error(str(exc))
 
-        if create_user_submitted:
-            try:
-                user = api_request(
-                    "POST",
-                    "/memory/users",
-                    json={"name": user_name.strip()},
+    #     with st.form("restore_user_form"):
+    #         existing_user_id = st.text_input("已有用户 ID")
+    #         restore_user_submitted = st.form_submit_button("使用已有用户")
+    #     if restore_user_submitted:
+    #         try:
+    #             user_id = str(UUID(existing_user_id.strip()))
+    #             user = api_request("GET", f"/memory/users/{user_id}")
+    #             activate_user(user)
+    #             st.rerun()
+    #         except (requests.exceptions.RequestException, ValueError) as exc:
+    #             st.error(str(exc))
+    auth_notice = st.session_state.pop("auth_notice", None)
+    if auth_notice:
+        st.info(auth_notice)
+    if not st.session_state.get("auth_token"):
+        login_tab, register_tab = st.tabs(["登录", "注册"])
+
+        with login_tab:
+            with st.form("login_form", clear_on_submit=True):
+                username = st.text_input(
+                    "账号",
+                    max_chars=64,
                 )
-                activate_user(user)
-                st.rerun()
-            except (requests.exceptions.RequestException, ValueError) as exc:
-                st.error(str(exc))
+                password = st.text_input(
+                    "密码",
+                    type="password",
+                    max_chars=128,
+                )
+                login_submitted = st.form_submit_button("登录")
 
-        with st.form("restore_user_form"):
-            existing_user_id = st.text_input("已有用户 ID")
-            restore_user_submitted = st.form_submit_button("使用已有用户")
+            if login_submitted:
+                try:
+                    result = api_request(
+                        "POST",
+                        "/auth/login",
+                        json={
+                            "username": username,
+                            "password": password,
+                        },
+                    )
 
-        if restore_user_submitted:
+                    # 先保存令牌，加载会话时才能通过认证。
+                    st.session_state.auth_token = result["access_token"]
+                    activate_user(result["user"])
+
+                except (
+                    requests.exceptions.RequestException,
+                    ValueError,
+                    KeyError,
+                ) as exc:
+                    clear_login()
+                    st.error(f"登录未完成：{exc}")
+                else:
+                    st.rerun()
+
+        with register_tab:
+            st.caption(
+                "账号使用 3～64 位英文字母、数字或下划线；"
+                "密码为 8～128 位。"
+            )
+
+            with st.form("register_form", clear_on_submit=True):
+                new_username = st.text_input(
+                    "注册账号",
+                    max_chars=64,
+                )
+                display_name = st.text_input(
+                    "显示名称",
+                    max_chars=100,
+                )
+                new_password = st.text_input(
+                    "设置密码",
+                    type="password",
+                    max_chars=128,
+                )
+                confirm_password = st.text_input(
+                    "确认密码",
+                    type="password",
+                    max_chars=128,
+                )
+                register_submitted = st.form_submit_button("注册")
+
+            if register_submitted:
+                if new_password != confirm_password:
+                    st.error("两次输入的密码不一致。")
+                else:
+                    try:
+                        api_request(
+                            "POST",
+                            "/auth/register",
+                            json={
+                                "username": new_username,
+                                "name": display_name,
+                                "password": new_password,
+                            },
+                        )
+                    except (
+                        requests.exceptions.RequestException,
+                        ValueError,
+                    ) as exc:
+                        st.error(f"注册失败：{exc}")
+                    else:
+                        st.success("注册成功，请切换到登录页签登录。")
+
+    else:
+        if st.button("退出登录", width="stretch"):
             try:
-                user_id = str(UUID(existing_user_id.strip()))
-                user = api_request("GET", f"/memory/users/{user_id}")
-                activate_user(user)
+                api_request("POST", "/auth/logout")
+            except (
+                requests.exceptions.RequestException,
+                ValueError,
+            ) as exc:
+                st.error(f"退出失败，请重试：{exc}")
+            else:
+                clear_login()
                 st.rerun()
-            except (requests.exceptions.RequestException, ValueError) as exc:
-                st.error(str(exc))
 
     if st.session_state.user_id:
         st.caption(f"当前用户：{st.session_state.user_name}")
-        st.code(st.session_state.user_id, language=None)
-        st.caption("保存这个 ID，下次打开页面时可以恢复会话。")
+        st.caption("会话与记忆关联当前登录账号。")
 
         if st.button(
             "新建对话",
@@ -564,6 +706,7 @@ with st.sidebar:
                     with st.spinner("正在解析资料并写入知识库……"):
                         response = requests.post(
                             f"{API_URL}/documents/upload",
+                            headers=auth_headers(),
                             files={
                                 "file": (
                                     uploaded_file.name,
@@ -573,6 +716,7 @@ with st.sidebar:
                             },
                             timeout=(10, 300),
                         )
+                        handle_auth_expired(response)
                         response.raise_for_status()
                         result = response.json()
 
@@ -602,8 +746,11 @@ with st.sidebar:
                 except (requests.exceptions.RequestException, ValueError, KeyError):
                     st.error("未能获取有效的上传结果，请查看 API 终端。")
 
-if not st.session_state.user_id:
-    st.info("请先在侧边栏创建用户，或填写已有用户 ID。")
+# if not st.session_state.user_id:
+#     st.info("请先在侧边栏创建用户，或填写已有用户 ID。")
+#     st.stop()
+if not st.session_state.get("auth_token"):
+    st.info("请先在侧边栏注册或登录。")
     st.stop()
 
 if not st.session_state.session_id:
@@ -648,13 +795,14 @@ if question:
             # response = requests.post(f"{API_URL}/ask", json={"question": question,"history": history}, timeout=(10, 180))
             response = requests.post(
                 f"{API_URL}/ask",
+                headers=auth_headers(),
                 json={
-                    "user_id":st.session_state.user_id,
                     "session_id": st.session_state.session_id,
                     "question": question,
                 },
                 timeout=(10, 180),
             )
+            handle_auth_expired(response)
             response.raise_for_status()
             result = response.json()
             if not isinstance(result, dict) or not isinstance(result.get("answer"), str):
