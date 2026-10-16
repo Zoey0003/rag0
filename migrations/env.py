@@ -1,11 +1,17 @@
 from logging.config import fileConfig
 
 from alembic import context
-
-from memory.database import Base, engine
-import memory.models  # 注册模型，使 Base.metadata 包含三张表
-
 config = context.config
+
+import sys
+from pathlib import Path
+# 获取 backend 的绝对路径
+backend_dir = Path(__file__).resolve().parent.parent / "backend"
+# 添加到模块搜索路径
+sys.path.insert(0, str(backend_dir))
+from memory.database import Base, engine
+import memory.models  # 注册模型，使 Base.metadata 包含所有模型表
+
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -44,3 +50,9 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
+
+if __name__ == "__main__":
+    if context.is_offline_mode():
+        run_migrations_offline()
+    else:
+        run_migrations_online()

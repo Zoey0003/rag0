@@ -26,7 +26,31 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    name:Mapped[str]=mapped_column(String(100),nullable=False)
+    username:Mapped[str|None]=mapped_column(
+        String(64),
+        unique=True,
+        nullable=True,)
+    password_hash:Mapped[str|None]=mapped_column(
+        String(256),
+        nullable=False,
+    )
+class AuthToken(Base):
+    __tablename__="auth_tokens"
+    token_hash:Mapped[str]=mapped_column(
+        String(64),
+        primary_key=True,
+    )
+    user_id:Mapped[UUID]=mapped_column(
+        ForeignKey("memory_users.id"),#forrign列=主表的某列 设置外键的这个是从表
+        nullable=False,
+        index=True,#默认创建b+ index
 
+    )
+    expires_at:Mapped[datetime]=mapped_column(
+        DateTime(timezone=True),
+        nullable=False
+    )# 过期时间
 
 class ChatSession(Base):
     """会话表：保存标题、用户归属和时间。"""

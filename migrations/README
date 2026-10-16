@@ -1,0 +1,7 @@
+Generic single-database configuration.
+
+
+1:migration file :python file 
+command:python -m alembic revision --autogenerate -m "create tables"
+2:make migration:make python file to sql and change sqldatabase
+command:python -m alembic upgrade head

@@ -4,7 +4,8 @@ from memory.database import SessionLocal
 from memory import repository
 from memory.summary_service import prepare_session_context
 from memory.export_service import export_session_markdown
-
+from fastapi import Depends
+from memory.authentication import require_user_id
 from memory.models import User
 
 from threading import Lock
@@ -33,7 +34,11 @@ from utils.env_utils import MILVUS_URI, COLLECTION_NAME
 from fastapi import BackgroundTasks
 from memory.extractor import extract_and_save_memories
 
+from auth_api import router as auth_router
+
 app = FastAPI(title="RAG 问答 API")
+app.include_router(auth_router)
+
 graph_lock = Lock()
 
 class CreateUserRequest(BaseModel):
@@ -41,11 +46,14 @@ class CreateUserRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
 class CreateMemorySessionRequest(BaseModel):
     """创建持久化会话的请求参数。"""
-    user_id: UUID
-    title: str = Field(default="新对话", min_length=1, max_length=200)
+    title: str = Field(
+        default="新对话", 
+        min_length=1, 
+        max_length=200
+        )
+    
 class RenameMemorySessionRequest(BaseModel):
     """会话重命名请求。"""
-    user_id: UUID
     title: str = Field(min_length=1, max_length=200)
 
 
@@ -59,7 +67,6 @@ class RenameMemorySessionRequest(BaseModel):
 
 class AskRequest(BaseModel):
     """问答请求，指定用户和数据库会话。"""
-    user_id: UUID
     session_id: UUID
     question: str = Field(min_length=1, max_length=2000)
 
@@ -94,7 +101,7 @@ class AskResponse(BaseModel):
 class CreateMemoryRequest(BaseModel):
     """手动保存长期记忆的请求参数。"""
 
-    user_id: UUID
+    
     content: str = Field(min_length=1, max_length=1000)
     kind: Literal["preference", "fact"] = "preference"
     source_message_id: int | None = Field(default=None, gt=0)
@@ -105,7 +112,7 @@ def health():
     return {"status": "ok"}
 
 #用户输入要去保存长期记忆的时候可以保存
-def save_explicit_preference(request: AskRequest, content: str) -> AskResponse:
+def save_explicit_preference(request: AskRequest, content: str,user_id:UUID) -> AskResponse:
     """保存用户明确要求记住的回答偏好及本轮聊天记录。"""
     content = content.strip()
     if not content or len(content) > 1000:
@@ -121,14 +128,14 @@ def save_explicit_preference(request: AskRequest, content: str) -> AskResponse:
         with SessionLocal.begin() as db:
             repository.set_initial_session_title(
                 db,
-                user_id=request.user_id,
+                user_id=user_id,
                 session_id=request.session_id,
                 question=request.question,
             )
 
             user_message = repository.save_message(
                 db,
-                user_id=request.user_id,
+                user_id=user_id,
                 session_id=request.session_id,
                 role="user",
                 content=request.question.strip(),
@@ -136,7 +143,7 @@ def save_explicit_preference(request: AskRequest, content: str) -> AskResponse:
 
             repository.save_memory(
                 db,
-                user_id=request.user_id,
+                user_id=user_id,
                 content=content,
                 kind="preference",
                 source_message_id=user_message.id,
@@ -144,7 +151,7 @@ def save_explicit_preference(request: AskRequest, content: str) -> AskResponse:
 
             repository.save_message(
                 db,
-                user_id=request.user_id,
+                user_id=user_id,
                 session_id=request.session_id,
                 role="assistant",
                 content=answer,
@@ -255,7 +262,9 @@ def save_explicit_preference(request: AskRequest, content: str) -> AskResponse:
 #     )
 
 @app.post("/ask", response_model=AskResponse)
-def ask(request: AskRequest, background_tasks: BackgroundTasks):
+def ask(request: AskRequest, 
+        background_tasks: BackgroundTasks,
+        user_id:UUID=Depends(require_user_id)):
     """读取数据库历史执行问答，并以一个事务保存本轮消息。"""
     question = request.question.strip()
     if not question:
@@ -272,6 +281,7 @@ def ask(request: AskRequest, background_tasks: BackgroundTasks):
                     return save_explicit_preference(
                         request,
                         content=question[len(prefix):],
+                        user_id=user_id,
                     )
             try:
                 # with SessionLocal() as db:
@@ -282,11 +292,11 @@ def ask(request: AskRequest, background_tasks: BackgroundTasks):
                 #         token_budget=4000,
                 #     )
                 summary, history = prepare_session_context(
-                    user_id=request.user_id,
+                    user_id=user_id,
                     session_id=request.session_id,
                     model=llm,
                     history_budget=4000,
-                )
+                )#生成摘要和历史消息字段
             except ValueError as exc:
                 raise HTTPException(
                     status_code=404,
@@ -338,7 +348,7 @@ def ask(request: AskRequest, background_tasks: BackgroundTasks):
             with SessionLocal() as db:
                 memories = repository.list_memories(
                     db,
-                    user_id=request.user_id,
+                    user_id=user_id,
                     limit=50,
                 )
 
@@ -397,13 +407,13 @@ def ask(request: AskRequest, background_tasks: BackgroundTasks):
                 with SessionLocal.begin() as db:
                     repository.set_initial_session_title(
                         db,
-                        user_id=request.user_id,
+                        user_id=user_id,
                         session_id=request.session_id,
                         question=question,
                     )#先把标题初始化了
                     user_message = repository.save_message(
                         db,
-                        user_id=request.user_id,
+                        user_id=user_id,
                         session_id=request.session_id,
                         role="user",
                         content=question,
@@ -411,7 +421,7 @@ def ask(request: AskRequest, background_tasks: BackgroundTasks):
                     source_message_id = user_message.id
                     repository.save_message(
                         db,
-                        user_id=request.user_id,
+                        user_id=user_id,
                         session_id=request.session_id,
                         role="assistant",
                         content=answer,
@@ -423,7 +433,7 @@ def ask(request: AskRequest, background_tasks: BackgroundTasks):
                 # 放在 with 外面：消息提交成功后才安排提取。
                 background_tasks.add_task(
                     extract_and_save_memories,
-                    user_id=request.user_id,
+                    user_id=user_id,
                     source_message_id=source_message_id,
                 )
 
@@ -450,7 +460,8 @@ def ask(request: AskRequest, background_tasks: BackgroundTasks):
 
 
 @app.post("/documents/upload")
-def upload_document(file: UploadFile = File(...)):
+def upload_document(file: UploadFile = File(...),
+                    user_id:UUID=Depends(require_user_id)):
     filename = file.filename or ""
 
     # 仅接受当前目录中的单个 Markdown 文件名。
@@ -542,29 +553,31 @@ def upload_document(file: UploadFile = File(...)):
 
 
 
-@app.post("/memory/users", status_code=201)
-def create_memory_user(request: CreateUserRequest):
+@app.post("/memory/users")
+def create_memory_user():
     """创建用户，并提交到 PostgreSQL。"""
-    try:
-        with SessionLocal.begin() as db:
-            user = repository.create_user(db, request.name)
-            result = {
-                "user_id": str(user.id),
-                "name": user.name,
-            }
-        return result
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-
+    # try:
+    #     with SessionLocal.begin() as db:
+    #         user = repository.create_user(db, request.name)
+    #         result = {"user_id": str(user.id), "name": user.name}
+    #     return result
+    # except ValueError as exc:
+    #     raise HTTPException(status_code=422, detail=str(exc)) from None
+    raise HTTPException(
+        status_code=410,
+        detail="此入口已停用，请使用 /auth/register 注册",
+    )
 
 @app.post("/memory/sessions", status_code=201)
-def create_memory_session(request: CreateMemorySessionRequest):
+def create_memory_session(
+    request: CreateMemorySessionRequest,
+    user_id: UUID=Depends(require_user_id)                      ):
     """创建数据库会话，并返回会话 ID。"""
     try:
         with SessionLocal.begin() as db:
             chat_session = repository.create_session(
                 db,
-                user_id=request.user_id,
+                user_id=user_id,
                 title=request.title,
             )
             result = {
@@ -579,7 +592,7 @@ def create_memory_session(request: CreateMemorySessionRequest):
 
 
 @app.get("/memory/sessions")
-def list_memory_sessions(user_id: UUID):
+def list_memory_sessions(user_id: UUID=Depends(require_user_id)):
     """读取用户的数据库会话列表，按最近活动时间排序。"""
     with SessionLocal() as db:
         chat_sessions = repository.list_sessions(db, user_id)
@@ -597,6 +610,7 @@ def list_memory_sessions(user_id: UUID):
 def rename_memory_session(
     session_id: UUID,
     request: RenameMemorySessionRequest,
+    user_id: UUID=Depends(require_user_id),
 ):
     """修改会话标题，不修改历史消息。"""
     title = request.title.strip()
@@ -610,7 +624,7 @@ def rename_memory_session(
         with SessionLocal.begin() as db:
             chat_session = repository.rename_session(
                 db,
-                user_id=request.user_id,
+                user_id=user_id,
                 session_id=session_id,
                 title=title,
             )
@@ -630,7 +644,9 @@ def rename_memory_session(
 
 
 @app.delete("/memory/sessions/{session_id}")
-def delete_memory_session(session_id: UUID, user_id: UUID):
+def delete_memory_session(
+    session_id: UUID, 
+    user_id: UUID=Depends(require_user_id)):
     """删除会话及消息，保留长期记忆。"""
     try:
         with graph_lock:
@@ -646,7 +662,7 @@ def delete_memory_session(session_id: UUID, user_id: UUID):
 
 
 @app.get("/memory/sessions/{session_id}/export")
-def export_memory_session(session_id: UUID, user_id: UUID):
+def export_memory_session(session_id: UUID, user_id: UUID=Depends(require_user_id)):
     """读取完整会话并返回 Markdown 文件内容。"""
     try:
         # 与问答和删除共用锁，避免导出到尚未完成的一轮消息。
@@ -660,7 +676,7 @@ def export_memory_session(session_id: UUID, user_id: UUID):
 @app.get("/memory/sessions/{session_id}/messages")
 def list_memory_messages(
     session_id: UUID,
-    user_id: UUID,
+    user_id: UUID=Depends(require_user_id),
     limit: int = 100,
     before_id: int | None = None,
 ):
@@ -691,13 +707,15 @@ def list_memory_messages(
 
 
 @app.post("/memory/facts")
-def create_memory_fact(request: CreateMemoryRequest):
+def create_memory_fact(
+    request: CreateMemoryRequest,
+    user_id:UUID=Depends(require_user_id)):
     """保存长期记忆；完全相同的内容复用已有记录。"""
     try:
         with SessionLocal.begin() as db:
             memory = repository.save_memory(
                 db,
-                user_id=request.user_id,
+                user_id=user_id,
                 content=request.content,
                 kind=request.kind,
                 source_message_id=request.source_message_id,
@@ -715,7 +733,7 @@ def create_memory_fact(request: CreateMemoryRequest):
 
 
 @app.get("/memory/facts")
-def list_memory_facts(user_id: UUID):
+def list_memory_facts(user_id: UUID=Depends(require_user_id)):
     """查询当前用户最近的长期记忆。"""
     try:
         with SessionLocal() as db:
@@ -735,7 +753,7 @@ def list_memory_facts(user_id: UUID):
 
 
 @app.delete("/memory/facts/{memory_id}")
-def delete_memory_fact(memory_id: UUID, user_id: UUID):
+def delete_memory_fact(memory_id: UUID, user_id: UUID=Depends(require_user_id)):
     """删除一条属于指定用户的长期记忆。"""
     try:
         with SessionLocal.begin() as db:
@@ -743,3 +761,12 @@ def delete_memory_fact(memory_id: UUID, user_id: UUID):
         return {"message": "记忆已删除"}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+@app.get("/memory/users/{user_id}")
+def get_memory_user(user_id: UUID):
+    """不再允许凭用户 ID 恢复身份。"""
+    raise HTTPException(
+        status_code=410,
+        detail="此入口已停用，请登录后使用 /auth/me",
+    )
