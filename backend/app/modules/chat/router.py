@@ -1,7 +1,7 @@
 from uuid import UUID
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter,  Depends, HTTPException
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.core.concurrency import graph_lock
@@ -10,12 +10,18 @@ from app.modules.auth.dependencies import require_user_id
 from app.modules.chat.schemas import AskRequest, AskResponse, Source
 from app.modules.conversations import repository as conversation_repository
 from app.modules.memory import repository as memory_repository
-from app.modules.memory.extractor import extract_and_save_memories
+# from app.modules.memory.extractor import extract_and_save_memories
+# from app.tasks import extract_memories_task
+from app.modules.memory.task_dispatcher import publish_memory_task
 from app.modules.memory.summary_service import prepare_session_context
+from app.core.rate_limit import check_rate_limit
+from app.core.rate_limit import check_token_bucket
+from app.modules.memory.task_memory import MemoryExtractionTask
 
 from graph2.graph_2 import graph
 from llm_models.all_llm import llm
-
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["问答"])
 
@@ -83,9 +89,14 @@ def save_explicit_preference(request: AskRequest, content: str,user_id:UUID) -> 
 
 @router.post("/ask", response_model=AskResponse)
 def ask(request: AskRequest, 
-        background_tasks: BackgroundTasks,
         user_id:UUID=Depends(require_user_id)):
     """读取数据库历史执行问答，并以一个事务保存本轮消息。"""
+    check_token_bucket(
+    scope="ask",
+    identity=str(user_id),
+    capacity=10,
+    refill_seconds=6,
+    )
     question = request.question.strip()
     if not question:
         raise HTTPException(status_code=422, detail="问题不能为空")
@@ -196,6 +207,7 @@ def ask(request: AskRequest,
                 "transform_count": 0,
                 "generation_count": 0,
                 "user_preferences": user_preferences,
+                "user_id": str(user_id),
             })
 
             answer = result.get("generation", "")
@@ -239,6 +251,11 @@ def ask(request: AskRequest,
                         content=question,
                     )
                     source_message_id = user_message.id
+                    db.add(
+                        MemoryExtractionTask(
+                            source_message_id=source_message_id,
+                        )
+                    )
                     conversation_repository.save_message(
                         db,
                         user_id=user_id,
@@ -250,12 +267,16 @@ def ask(request: AskRequest,
 
                    
 
-                # 放在 with 外面：消息提交成功后才安排提取。
-                background_tasks.add_task(
-                    extract_and_save_memories,
-                    user_id=user_id,
-                    source_message_id=source_message_id,
-                )
+                
+                
+                # 消息和待办事务提交后，再尝试投递。
+                try:
+                    publish_memory_task(source_message_id)
+                except Exception:
+                    logger.exception(
+                        "待办任务投递异常：来源消息=%s",
+                        source_message_id,
+                    )
 
                     
             return response

@@ -6,11 +6,14 @@ from app.modules.conversations.models import (
     ChatSession,
 )
 from memory.models import MemoryFact
-
+from app.modules.memory.task_memory import MemoryExtractionTask
+from app.modules.documents.models import KnowledgeDocument
 __all__ = [
     "User",
     "AuthToken",
     "ChatSession",
     "ChatMessage",
     "MemoryFact",
+    "MemoryExtractionTask",
+    "KnowledgeDocument",
 ]

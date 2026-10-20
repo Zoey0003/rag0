@@ -33,15 +33,14 @@ from uuid import UUID
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials
 
-
-
+from app.core.rate_limit import auth_rate_limit
 
 router = APIRouter(prefix="/auth", tags=["账号认证"])
 
 
 
 
-@router.post("/register", status_code=201)
+@router.post("/register", status_code=201,dependencies=[Depends(auth_rate_limit)])
 def register(request: RegisterRequest):
     username = request.username.strip().lower()
     name = request.name.strip()
@@ -104,7 +103,7 @@ DUMMY_PASSWORD_HASH = hash_password(
 )
 
 
-@router.post("/login")
+@router.post("/login",dependencies=[Depends(auth_rate_limit)])
 def login(request: LoginRequest):
     username = request.username.strip().lower()
 

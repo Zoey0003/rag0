@@ -685,7 +685,7 @@ with st.sidebar:
     )
     st.caption("成功问答保存在数据库中，打开会话显示最近 100 条消息。")
     with st.expander("上传知识资料", icon=":material/upload_file:"):
-        st.caption("支持 UTF-8 Markdown，最大 5 MiB。同名且内容不同的文件请改名上传。")
+        st.caption("支持 UTF-8 Markdown，最大 5 MiB。资料仅用于你的知识库；同名上传会更新已有文档。")
         with st.form("upload_document_form", clear_on_submit=True):
             uploaded_file = st.file_uploader(
                 "选择 Markdown 文件",
@@ -693,7 +693,7 @@ with st.sidebar:
                 max_upload_size=5,
             )
             upload_submitted = st.form_submit_button(
-                "上传并入库",
+                "上传或更新",
                 icon=":material/upload:",
                 width="stretch",
             )
@@ -745,6 +745,36 @@ with st.sidebar:
                     st.error(str(detail))
                 except (requests.exceptions.RequestException, ValueError, KeyError):
                     st.error("未能获取有效的上传结果，请查看 API 终端。")
+
+    if st.session_state.get("auth_token"):
+        with st.expander("删除知识资料", icon=":material/delete:"):
+            try:
+                delete_notice = st.session_state.pop("document_delete_notice", None)
+                if delete_notice:
+                    st.success(delete_notice)
+                document_items = api_request("GET", "/documents")
+                if not document_items:
+                    st.caption("暂无个人资料，可先上传 Markdown。")
+                else:
+                    document_map = {item["document_id"]: item for item in document_items}
+                    selected_document = st.selectbox(
+                        "选择要删除的文档",
+                        options=list(document_map),
+                        format_func=lambda key: document_map[key]["filename"] + (
+                            "（删除未完成，可重试）" if document_map[key]["status"] == "deleting" else ""
+                        ),
+                        key=f"delete_document_{st.session_state.user_id}",
+                    )
+                    confirmed = st.checkbox(
+                        "确认删除所选文档及其知识库内容",
+                        key=f"confirm_document_delete_{selected_document}",
+                    )
+                    if st.button("删除所选文档", disabled=not confirmed, width="stretch"):
+                        api_request("DELETE", f"/documents/{selected_document}")
+                        st.session_state.document_delete_notice = "文档已删除。"
+                        st.rerun()
+            except (requests.exceptions.RequestException, ValueError, KeyError):
+                st.error("文档操作未完成，请检查服务后重试。")
 
 # if not st.session_state.user_id:
 #     st.info("请先在侧边栏创建用户，或填写已有用户 ID。")

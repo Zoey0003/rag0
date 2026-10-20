@@ -21,4 +21,4 @@ class GraphState(TypedDict):
     generation_count: int  # 当前问题累计生成答案的次数
     original_question:str
     user_preferences: str  # 当前用户的长期回答偏好
-    
+    user_id: str  # 由认证后的 API 注入

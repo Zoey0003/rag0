@@ -6,6 +6,7 @@ __pycache__/
 *.py[cod]
 .idea/
 .test-tmp/
+/backend/datas/personal/
 
 # Local dependencies, models and generated files
 /models/

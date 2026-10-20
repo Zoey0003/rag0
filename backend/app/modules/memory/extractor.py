@@ -1,7 +1,7 @@
 import logging
 from typing import Literal
 from uuid import UUID
-
+from datetime import datetime, timezone
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -58,7 +58,12 @@ def extract_and_save_memories(
             )
             if message is None:
                 return
-
+            if message.memory_extracted_at is not None:
+                logger.info(
+                    "消息已完成记忆提取，跳过：来源消息=%s",
+                    source_message_id,
+                )
+                return
             content = message.content
 
         # 模型调用期间不占用数据库连接。
@@ -85,7 +90,7 @@ def extract_and_save_memories(
             )),
             HumanMessage(content=content),
         ])
-
+       
         candidates = [
             item
             for item in result.memories
@@ -93,8 +98,7 @@ def extract_and_save_memories(
             and item.evidence in content
             and item.content.strip()
         ]
-        if not candidates:
-            return
+        
 
         with SessionLocal.begin() as db:
             # 同一用户的自动提取写入串行化，降低重复保存风险。
@@ -105,7 +109,31 @@ def extract_and_save_memories(
             )
             if user is None:
                 return
+            message = db.scalar(
+                    select(ChatMessage)
+                    .join(
+                        ChatSession,
+                        ChatMessage.session_id == ChatSession.id,
+                    )
+                    .where(
+                        ChatMessage.id == source_message_id,
+                        ChatMessage.role == "user",
+                        ChatMessage.status == "success",
+                        ChatSession.user_id == user_id,
+                    )
+                    .with_for_update(of=ChatMessage)
+                )
 
+            if message is None:
+                    return
+
+                # 另一个重复任务可能已先完成写入。
+            if message.memory_extracted_at is not None:
+                logger.info(
+                    "消息已完成记忆提取，跳过写入：来源消息=%s",
+                    source_message_id,
+                )
+                return
             for item in candidates:
                 repository.save_memory(
                     db,
@@ -114,6 +142,7 @@ def extract_and_save_memories(
                     kind=item.kind,
                     source_message_id=source_message_id,
                 )
+            message.memory_extracted_at = datetime.now(timezone.utc)
 
         logger.info(
             "自动记忆提取完成：来源消息=%s，候选数=%s",
@@ -126,3 +155,4 @@ def extract_and_save_memories(
             "自动记忆提取失败：来源消息=%s",
             source_message_id,
         )
+        raise
